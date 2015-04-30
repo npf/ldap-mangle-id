@@ -162,7 +162,7 @@ GetOptions(
           ) or die "\n".usage();
 
 
-($server_addr,$server_port) = (shift or die "Error: Need server address[:port].\n\n".usage()) =~ /^([^.]+)(?::(.+))$/ ;
+($server_addr,$server_port) = (shift or die "Error: Need server address[:port].\n\n".usage()) =~ /^([^:]+)(?::(.+))?$/ ;
 $server_port ||= ($ssl)?"ldaps":"ldap";
 $id_shift_value = shift or die "Error: Need a value.\n\n".usage();
 
