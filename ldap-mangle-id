@@ -170,6 +170,7 @@ GetOptions(
 $server_port ||= ($ssl)?"ldaps":"ldap";
 $id_shift_value = shift or die "Error: Need a value.\n\n".usage();
 
+($verbose > 0) and warn "open listener socket ($local_addr:$local_port)\n";
 my $listener_sock = IO::Socket::INET->new(
 	Listen => 5,
 	Proto => 'tcp',
@@ -177,7 +178,6 @@ my $listener_sock = IO::Socket::INET->new(
     LocalAddress => $local_addr,
 	LocalPort => $local_port,
     ) or die "Failed to create listener socket: $!\n";
-($verbose > 0) and warn "listener socket opened ($local_addr:$local_port)\n";
 
 my $select = IO::Select->new($listener_sock);
 my $server_sock = {};
