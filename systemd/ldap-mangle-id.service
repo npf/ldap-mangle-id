@@ -2,7 +2,9 @@
 Description=LDAP proxy which mangles uid and gid on the fly
 
 [Service]
-ExecStart=/usr/local/bin/ldap-mangle-id server 30000 -v
+ExecStart=/usr/local/bin/ldap-mangle-id -p 1389 -v -- server 30000
+User=nobody
+Group=nogroup
 
 [Install]
 WantedBy=multi-user.target
