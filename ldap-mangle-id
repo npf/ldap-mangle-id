@@ -1,0 +1,204 @@
+#!/usr/bin/perl -w
+# Copyright (c) 2006 Hans Klunder <hans.klunder@bigfoot.com>.
+# Copyright (c) 2010 Dobrica Pavlinusic <dpavlin@rot13.org>.
+# Copyright (c) 2015 Pierre Neyron <pierre.neyron@imag.fr>.
+# This program is free software; you can redistribute it and/or
+# modify it under the same terms as Perl itself.
+# 
+# References:
+#   simple-proxy.pl from http://search.cpan.org/~marschap/perl-ldap-0.65
+#   ldap-rewrite.pl from http://blog.rot13.org/2009/03/virtual-ldap-rewrite-or-augment-data-on-the-fly.html
+
+use strict;
+use warnings;
+
+use Getopt::Long;
+use IO::Select;
+use IO::Socket;
+use IO::Socket::SSL;
+use Data::Dumper;
+use Convert::ASN1 qw(asn_read);
+use Net::LDAP::ASN qw(LDAPRequest LDAPResponse);
+
+my $server_addr;
+my $server_port;
+my $ssl = undef;
+my $local_addr = "localhost";
+my $local_port = "ldap";
+my $regex = qr/^(uid=[^,]+,ou=People|cn=[^,]+,ou=Group),/;
+my $uid_attr = "uidNumber";
+my $gid_attr = "gidNumber";
+my $id_shift_value = 10000;
+
+sub handle($$) {
+  my $clientsocket = shift;
+  my $serversocket = shift;
+
+  # read from client
+  asn_read($clientsocket, my $reqpdu);
+  #log_request($reqpdu);
+  
+  # send to server
+  # TODO: do not die but return to client an error code
+  print $serversocket $reqpdu or die "Could not send PDU to server\n";
+  
+  # read from server
+  my $ready;
+  my $sel = IO::Select->new($serversocket);
+  for( $ready = 1 ; $ready ; $ready = $sel->can_read(0)) {
+    if (asn_read($serversocket, my $respdu)) {
+        #warn("got answer\n");
+        my $newpdu = change_response($respdu);
+        print $clientsocket $newpdu;
+    } else {
+        print "server close the connection\n";
+        return 1;
+    }
+  }
+  return 0;
+}
+
+sub log_request($) {
+  my $pdu = shift;
+
+  print '-' x 80,"\n";
+  print "Request ASN 1:\n";
+  Convert::ASN1::asn_hexdump(\*STDOUT,$pdu);
+  print "Request Perl:\n";
+  my $request = $LDAPRequest->decode($pdu);
+  print Dumper($request);
+}
+
+
+sub log_response($) {
+  my $pdu = shift >= 0;
+
+  print '-' x 80,"\n";
+  print "Response ASN 1:\n";
+  Convert::ASN1::asn_hexdump(\*STDOUT,$pdu);
+  print "Response Perl:\n";
+  my $response = $LDAPResponse->decode($pdu);
+  print Dumper($response);
+}
+
+
+sub change_response($) {
+  my $pdu = shift;
+
+  my $response = $LDAPResponse->decode($pdu);
+  if (exists($response->{'protocolOp'}) and 
+      exists($response->{'protocolOp'}->{'searchResEntry'}) and
+      exists($response->{'protocolOp'}->{'searchResEntry'}->{'objectName'}) and
+      my @match = $response->{'protocolOp'}->{'searchResEntry'}->{'objectName'} =~ $regex and
+      exists($response->{'protocolOp'}->{'searchResEntry'}->{'attributes'})) {
+
+    my $attributes = $response->{'protocolOp'}->{'searchResEntry'}->{'attributes'};
+    foreach my $a (@$attributes) {
+      if ($a->{'type'} eq $uid_attr or $a->{'type'} eq $gid_attr) {
+        print "mangling ".$a->{'type'}.(($#match >= 0)?" for ".$match[0]:"")."\n";
+        unshift (@{$a->{'vals'}}, (shift(@{$a->{'vals'}}) + $id_shift_value));
+      }
+    }
+    $pdu = $LDAPResponse->encode($response);
+  }
+  return $pdu;
+}
+
+sub connect_server() {
+    my $sock;
+    if ($ssl) { 
+        $sock = IO::Socket::SSL->new(
+			PeerAddr => $server_addr,
+			PeerPort => $server_port,
+        ) or die "Failed connect or SSL handshake: $!,$SSL_ERROR";
+        print "connected to server (SSL)\n";
+    } else {
+        $sock = IO::Socket::INET->new(
+			Proto => 'tcp',
+			PeerAddr => $server_addr,
+			PeerPort => $server_port,
+		) or die "Failed to connect: $!\n";
+        print "connected to server\n";
+    }
+    return $sock;
+} 
+
+sub usage() {
+    my ($command) = $0 =~ /([^\/]+)$/;
+    my $usage = <<EOS;
+LDAP proxy mangle id
+  Start a LDAP proxy which relays queries to a real LDAP server but mangles uid
+  and gid value of the posix accounts by adding or subtracting a value to them.
+
+  Can be used enforce distinct intervals of ids, as required for a multi-domain
+  sssd configuration (see min_id/max_id in sssd.conf).
+
+Usage: 
+  $command [options] <LDAP server address>[:<port>] <value>
+
+Options:
+  -s, --local-addr <IP>     local IP address to bind to (default: localhost)
+  -p, --local-port <port>   local TCP port to bind to (default: ldap (389))
+  -r, --regex <regex>       regex for matching LDAP DN entries to mangle
+                            (default: ^(uid=[^,]+,ou=People|cn=[^,]+,ou=Group),)
+  -u, --uid <str>           uid LDAP object (default: uidNumber)
+  -g, --gid <str>           gid LDAP object (default: gidNumber)
+  -S, --ssl                 use SSL to connect remote server (default: no)
+  -h, --help                print this message
+
+EOS
+    return $usage;
+}
+Getopt::Long::Configure("gnu_getopt");
+
+GetOptions( 
+            "ssl|S" => \$ssl,
+            "uid|u=s" => \$uid_attr,
+            "gid|g=s" => \$gid_attr,
+            "regex|r=s" => sub { $regex = qr/$1/; },
+            "local-addr|s=s" => \$local_addr,
+            "local-port|p=s" => \$local_port,
+            "help|h"   => sub { print usage(); exit(0); }
+          ) or die "\n".usage();
+
+
+($server_addr,$server_port) = (shift or die "Error: Need server address[:port].\n\n".usage()) =~ /^([^.]+)(?::(.+))$/ ;
+$server_port ||= ($ssl)?"ldaps":"ldap";
+$id_shift_value = shift or die "Error: Need a value.\n\n".usage();
+
+my $listener_sock = IO::Socket::INET->new(
+	Listen => 5,
+	Proto => 'tcp',
+	Reuse => 1,
+    LocalAddress => $local_addr,
+	LocalPort => $local_port,
+    ) or die "Failed to create listener socket: $!\n";
+print "listener socket opened\n";
+
+my $select = IO::Select->new($listener_sock);
+my $server_sock = {};
+
+while (my @ready = $select->can_read()) {
+    foreach my $fh (@ready) {
+        if ($fh == $listener_sock) {
+            my $sock = $listener_sock->accept();
+            $select->add($sock);
+            print "new client socket for ".$sock->peerhost()."\n";
+        } else {
+            $server_sock->{$fh} ||= connect_server();
+            if (handle($fh,$server_sock->{$fh})) {
+                $server_sock->{$fh}->close();
+                delete($server_sock->{$fh});
+                $select->remove($fh);
+                $fh->close();
+            }
+        }
+        warn "server_sock={".join(", ",keys(%$server_sock))."}\n";
+    }
+}
+
+1;
+
+__END__
+
+# EOF
