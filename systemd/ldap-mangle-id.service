@@ -1,0 +1,8 @@
+[Unit]
+Description=LDAP proxy which mangles uid and gid on the fly
+
+[Service]
+ExecStart=/usr/local/bin/ldap-mangle-id server 30000 -v
+
+[Install]
+WantedBy=multi-user.target
