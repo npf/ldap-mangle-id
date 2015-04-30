@@ -29,6 +29,7 @@ my $regex = qr/^(uid=[^,]+,ou=People|cn=[^,]+,ou=Group),/;
 my $uid_attr = "uidNumber";
 my $gid_attr = "gidNumber";
 my $id_shift_value = 10000;
+my $verbose = 0;
 
 sub handle($$) {
   my $clientsocket = shift;
@@ -47,11 +48,11 @@ sub handle($$) {
   my $sel = IO::Select->new($serversocket);
   for( $ready = 1 ; $ready ; $ready = $sel->can_read(0)) {
     if (asn_read($serversocket, my $respdu)) {
-        #warn("got answer\n");
+        ($verbose > 4) and warn("got answer from server\n");
         my $newpdu = change_response($respdu);
         print $clientsocket $newpdu;
     } else {
-        print "server close the connection\n";
+        ($verbose > 3) and warn "server closed the connection\n";
         return 1;
     }
   }
@@ -95,7 +96,7 @@ sub change_response($) {
     my $attributes = $response->{'protocolOp'}->{'searchResEntry'}->{'attributes'};
     foreach my $a (@$attributes) {
       if ($a->{'type'} eq $uid_attr or $a->{'type'} eq $gid_attr) {
-        print "mangling ".$a->{'type'}.(($#match >= 0)?" for ".$match[0]:"")."\n";
+        ($verbose > 1) and warn "mangling ".$a->{'type'}.(($#match >= 0)?" for ".$match[0]:"")."\n";
         unshift (@{$a->{'vals'}}, (shift(@{$a->{'vals'}}) + $id_shift_value));
       }
     }
@@ -111,14 +112,14 @@ sub connect_server() {
 			PeerAddr => $server_addr,
 			PeerPort => $server_port,
         ) or die "Failed connect or SSL handshake: $!,$SSL_ERROR";
-        print "connected to server (SSL)\n";
+        ($verbose > 2) and warn "connected to $server_addr:$server_port (SSL)\n";
     } else {
         $sock = IO::Socket::INET->new(
 			Proto => 'tcp',
 			PeerAddr => $server_addr,
 			PeerPort => $server_port,
 		) or die "Failed to connect: $!\n";
-        print "connected to server\n";
+        ($verbose > 2) and warn "connected to $server_addr:$server_port\n";
     }
     return $sock;
 } 
@@ -144,6 +145,7 @@ Options:
   -u, --uid <str>           uid LDAP object (default: uidNumber)
   -g, --gid <str>           gid LDAP object (default: gidNumber)
   -S, --ssl                 use SSL to connect remote server (default: no)
+  -v, --verbose             be verbose (use multiple to increase verbosity)
   -h, --help                print this message
 
 EOS
@@ -158,6 +160,7 @@ GetOptions(
             "regex|r=s" => sub { $regex = qr/$1/; },
             "local-addr|s=s" => \$local_addr,
             "local-port|p=s" => \$local_port,
+            "verbose|v+" => \$verbose,
             "help|h"   => sub { print usage(); exit(0); }
           ) or die "\n".usage();
 
@@ -173,7 +176,7 @@ my $listener_sock = IO::Socket::INET->new(
     LocalAddress => $local_addr,
 	LocalPort => $local_port,
     ) or die "Failed to create listener socket: $!\n";
-print "listener socket opened\n";
+($verbose > 0) and warn "listener socket opened ($local_addr:$local_port)\n";
 
 my $select = IO::Select->new($listener_sock);
 my $server_sock = {};
@@ -183,7 +186,7 @@ while (my @ready = $select->can_read()) {
         if ($fh == $listener_sock) {
             my $sock = $listener_sock->accept();
             $select->add($sock);
-            print "new client socket for ".$sock->peerhost()."\n";
+            ($verbose > 0) and warn "new client socket for ".$sock->peerhost()."\n";
         } else {
             $server_sock->{$fh} ||= connect_server();
             if (handle($fh,$server_sock->{$fh})) {
@@ -193,7 +196,7 @@ while (my @ready = $select->can_read()) {
                 $fh->close();
             }
         }
-        warn "server_sock={".join(", ",keys(%$server_sock))."}\n";
+        ($verbose > 3) and warn "server_sock=[".join(", ",keys(%$server_sock))."]\n";
     }
 }
 
