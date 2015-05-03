@@ -12,5 +12,6 @@
   ldap-mangle-id is written in Perl, using the Net::LDAP modules.
   
 #### Known alternatives
-1.  https://github.com/mcavage/node-ldapjs
-2.  https://github.com/pfmooney/node-ldapjs-mangle-proxy
+*   See: http://people.redhat.com/mskinner/rhug/q1.2014/Integrating-RHEL-and-LDAP.pdf
+  *  https://github.com/mcavage/node-ldapjs
+  *  https://github.com/pfmooney/node-ldapjs-mangle-proxy
